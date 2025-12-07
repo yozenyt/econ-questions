@@ -11,9 +11,32 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, query, serverTimestamp, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
+        // --- START: CONFIGURATION FALLBACK FOR GITHUB PAGES ---
+        // !!! IMPORTANT: PASTE YOUR ACTUAL FIREBASE CONFIGURATION HERE !!!
+        // Configuration provided by the user is now inserted below:
+        const FALLBACK_FIREBASE_CONFIG = {
+            apiKey: "AIzaSyDtP6jaexHJ6FDYPAlyyZFqf3CVagiaEvA", 
+            authDomain: "econ-questions.firebaseapp.com", 
+            projectId: "econ-questions", 
+            storageBucket: "econ-questions.firebasestorage.app",
+            messagingSenderId: "733855268510",
+            appId: "1:733855268510:web:a39c12b73e968a4bb2858f",
+            measurementId: "G-6Z5VHKQKG0"
+        };
+        
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        
+        let firebaseConfig = {};
+        if (typeof __firebase_config !== 'undefined' && __firebase_config.length > 2) {
+             firebaseConfig = JSON.parse(__firebase_config);
+        } else {
+             // Use fallback config for non-Canvas environments (like GitHub Pages)
+             console.warn("Canvas Firebase configuration not detected. Using fallback/placeholder config.");
+             firebaseConfig = FALLBACK_FIREBASE_CONFIG;
+        }
+
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // --- END: CONFIGURATION FALLBACK FOR GITHUB PAGES ---
 
         let db;
         let auth;
@@ -45,7 +68,7 @@
 
         // --- UTILITY ---
         function handleError(message, error) {
-            // FIX: Use console.log for success/info messages, console.error for actual errors
+            // Use console.log for success/info messages, console.error for actual errors
             if (error) {
                 console.error(message, error);
             } else {
@@ -67,6 +90,7 @@
                  errorBox.classList.add('bg-yellow-100', 'text-yellow-700'); // Info / Warning
             }
 
+            errorBox.classList.remove('hidden');
 
             setTimeout(() => {
                 errorBox.classList.add('hidden');
@@ -78,8 +102,9 @@
 
         async function initFirebase() {
             try {
-                if (Object.keys(firebaseConfig).length === 0) {
-                    handleError("CRITICAL: Firebase config is missing.", null);
+                // Check if the user is using the placeholder config for external deployment
+                if (firebaseConfig.apiKey === "YOUR_FIREBASE_API_KEY") {
+                    handleError("CRITICAL: Firebase config is missing. If running on GitHub Pages, please replace the placeholder config in the JavaScript block with your project's actual keys.", null);
                     return;
                 }
                 
@@ -87,6 +112,7 @@
                 db = getFirestore(app);
                 auth = getAuth(app);
                 
+                // Use custom token if available (Canvas environment), otherwise sign in anonymously
                 if (initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
                 } else {
