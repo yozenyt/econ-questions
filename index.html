@@ -7,14 +7,14 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <script type="module">
-        // --- FIREBASE IMPORTS (Using CDN paths for environment compatibility) ---
+        // --- FIREBASE IMPORTS (Using CDN paths) ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
-            getFirestore, collection, doc, setDoc, query, onSnapshot, updateDoc, deleteDoc, addDoc, serverTimestamp, setLogLevel 
+            getFirestore, collection, doc, query, onSnapshot, updateDoc, deleteDoc, addDoc, serverTimestamp, setLogLevel 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- USER-PROVIDED FIREBASE CONFIGURATION ---
+        // --- CONFIG & STATE ---
         const firebaseConfig = {
             apiKey: "AIzaSyDtP6jaexHJ6FDYPAlyyZFqf3CVagiaEvA",
             authDomain: "econ-questions.firebaseapp.com",
@@ -25,7 +25,6 @@
             measurementId: "G-6Z5VHKQKG0"
         };
         
-        // --- APPLICATION STATE ---
         let db;
         let teacherQuestions = []; 
         let studentAttempts = {}; 
@@ -34,14 +33,11 @@
         let isTeacherMode = false;
         const TEACHER_PASSWORD = "EconBuddy"; 
         
-        // --- FIREBASE PATH HELPERS ---
         const QUESTIONS_COLLECTION_PATH = `questions`;
-        
-        // --- LOCAL STORAGE KEY ---
         const LOCAL_STORAGE_KEY = 'econ_student_attempts';
 
         // ----------------------------------------------------
-        // INITIALIZATION AND CONNECTION
+        // INITIALIZATION
         // ----------------------------------------------------
 
         function initFirebase() {
@@ -50,46 +46,37 @@
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 getAuth(app); 
-                
                 startListeners();
-                
             } catch (e) {
-                handleError("CRITICAL: Connection Failed. Teacher questions may not load.", e);
+                handleError("Connection Failed.", e);
             }
         }
         
         function startListeners() {
-            // 1. Load Student Attempts from Local Storage
             loadStudentAttempts();
-
-            // 2. Listen for ALL public questions
             const q = query(collection(db, QUESTIONS_COLLECTION_PATH));
             onSnapshot(q, (snapshot) => {
                 teacherQuestions = snapshot.docs.map(doc => ({
                     id: doc.id,
                     ...doc.data()
                 })).sort((a, b) => (b.created_at?.toMillis() || 0) - (a.created_at?.toMillis() || 0));
-                
                 renderQuestions();
             }, (error) => {
-                handleError("Error loading questions from Firestore.", error);
+                handleError("Question load error. Check rules.", error);
             });
-            
             renderTeacherUI(); 
         }
 
         // ----------------------------------------------------
-        // STUDENT LOCAL STORAGE HANDLERS
+        // LOCAL STORAGE (Student)
         // ----------------------------------------------------
 
         function loadStudentAttempts() {
             try {
                 const data = localStorage.getItem(LOCAL_STORAGE_KEY);
-                if (data) {
-                    studentAttempts = JSON.parse(data);
-                }
+                if (data) studentAttempts = JSON.parse(data);
             } catch (e) {
-                console.warn("Could not load local data. Browser storage may be restricted.");
+                console.warn("Local storage blocked.");
             }
         }
         
@@ -99,37 +86,32 @@
                 localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(studentAttempts));
                 return true;
             } catch (e) {
-                handleError("Error: Your attempt could not be saved locally.", e);
+                handleError("Notes failed to save locally.", e);
                 return false;
             }
         }
 
         // ----------------------------------------------------
-        // TEACHER FIRESTORE API WRAPPERS
+        // FIRESTORE API (Teacher)
         // ----------------------------------------------------
 
         async function addTeacherQuestion(content, modelAnswer) {
-            const questionsColRef = collection(db, QUESTIONS_COLLECTION_PATH);
-            await addDoc(questionsColRef, {
-                content: content,
-                modelAnswer: modelAnswer,
-                created_at: serverTimestamp(),
-                teacherId: "MsIp" 
+            await addDoc(collection(db, QUESTIONS_COLLECTION_PATH), {
+                content,
+                modelAnswer,
+                created_at: serverTimestamp()
             });
         }
         
         async function updateTeacherQuestion(questionId, content, modelAnswer) {
-            const questionRef = doc(db, QUESTIONS_COLLECTION_PATH, questionId);
-            await updateDoc(questionRef, {
-                content: content,
-                modelAnswer: modelAnswer,
-                updated_at: serverTimestamp() 
+            await updateDoc(doc(db, QUESTIONS_COLLECTION_PATH, questionId), {
+                content,
+                modelAnswer
             });
         }
         
         async function deleteTeacherQuestion(questionId) {
-            const questionRef = doc(db, QUESTIONS_COLLECTION_PATH, questionId);
-            await deleteDoc(questionRef);
+            await deleteDoc(doc(db, QUESTIONS_COLLECTION_PATH, questionId));
         }
 
         // ----------------------------------------------------
@@ -138,89 +120,73 @@
         
         function handleError(message, error) {
              const errorBox = document.getElementById('error-message');
-             const cleanMessage = message; 
-             errorBox.textContent = cleanMessage + (error ? `: ${error.message}` : '');
+             const isError = error || message.includes("Failed") || message.includes("error");
+             
+             errorBox.textContent = message + (error ? `: ${error.message}` : '');
             
-            errorBox.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-yellow-100', 'text-yellow-700', 'bg-green-100', 'text-green-700');
+             errorBox.className = 'px-4 py-3 rounded-t-xl'; 
             
-            if (error || cleanMessage.includes("CRITICAL") || cleanMessage.includes("Failed")) {
+             if (isError) {
                  errorBox.classList.add('bg-red-100', 'text-red-700'); 
-            } else if (cleanMessage.includes("Welcome") || cleanMessage.includes("successfully")) {
+             } else {
                  errorBox.classList.add('bg-green-100', 'text-green-700'); 
-            } else {
-                 errorBox.classList.add('bg-yellow-100', 'text-yellow-700'); 
-            }
+             }
+             errorBox.classList.remove('hidden');
 
-            errorBox.classList.remove('hidden');
-
-            setTimeout(() => {
-                errorBox.classList.add('hidden');
-                errorBox.classList.remove('bg-yellow-100', 'text-yellow-700', 'bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700');
-            }, 8000);
+             setTimeout(() => {
+                 errorBox.classList.add('hidden');
+             }, 4000);
         }
 
-        window.closeModal = function(id) {
+        window.closeModal = (id) => {
             document.getElementById(id).classList.add('hidden');
-            if (id === 'edit-modal') {
-                currentQuestionId = null;
-            }
+            if (id === 'edit-modal') currentQuestionId = null;
         }
 
-        window.handleQuestionClick = function(questionId) {
-            if (isTeacherMode) {
-                openTeacherEditModal(questionId);
-            } else {
-                openStudentAttemptModal(questionId);
-            }
+        window.handleQuestionClick = (questionId) => {
+            isTeacherMode ? openTeacherEditModal(questionId) : openStudentAttemptModal(questionId);
         }
 
-        // --- STUDENT MODE FUNCTIONS (Using LocalStorage) ---
+        // --- STUDENT MODE ---
 
-        window.openStudentAttemptModal = function(questionId) {
+        window.openStudentAttemptModal = (questionId) => {
             currentQuestionId = questionId;
             const masterQuestion = teacherQuestions.find(q => q.id === questionId);
             const studentAttempt = studentAttempts[questionId] || { studentAnswer: '', isAnswered: false };
             
             if (!masterQuestion) return handleError("Question not found.", null);
             
-            const modalContent = document.getElementById('edit-modal-content');
-            
-            modalContent.innerHTML = `
+            document.getElementById('edit-modal-content').innerHTML = `
                 <div class="flex justify-between items-center mb-6 border-b pb-3 sticky top-0 bg-white z-10">
-                    <h3 class="text-2xl font-bold text-gray-800">Your Attempt</h3>
-                    <button onclick="closeModal('edit-modal')" class="text-gray-400 hover:text-gray-600 p-1 transition duration-150 rounded-full hover:bg-gray-100">
+                    <h3 class="text-2xl font-bold text-gray-800">My Notes</h3>
+                    <button onclick="closeModal('edit-modal')" class="text-gray-400 hover:text-gray-600 p-1 transition rounded-full hover:bg-gray-100">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </button>
                 </div>
                 
                 <div class="space-y-6">
                     <div>
-                        <label for="edit-question-content-display" class="block text-sm font-bold text-gray-800 mb-2">Question</label>
-                        <textarea 
-                            id="edit-question-content-display" 
-                            rows="3"
-                            readonly
-                            class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-900 resize-none shadow-inner"
-                        >${masterQuestion.content || 'N/A'}</textarea>
+                        <label class="block text-sm font-bold text-gray-800 mb-2">Question</label>
+                        <textarea rows="3" readonly class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-900 resize-none shadow-inner">${masterQuestion.content || 'N/A'}</textarea>
                     </div>
                     
                     <div>
-                        <label for="edit-answer-content" class="block text-sm font-bold text-gray-700 mb-2">Your Answer / Notes (Saved Privately)</label>
+                        <label for="edit-answer-content" class="block text-sm font-bold text-gray-700 mb-2">My Notes (Private)</label>
                         <textarea 
                             id="edit-answer-content" 
                             rows="6"
                             placeholder="Type your attempt or notes here..."
-                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-micro focus:border-micro transition duration-150 resize-none shadow-inner text-gray-900"
+                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-micro focus:border-micro resize-none shadow-inner text-gray-900"
                         >${studentAttempt.studentAnswer || ''}</textarea>
                     </div>
                     
                     <div>
                         <div class="flex justify-between items-center mb-2">
-                            <label class="block text-sm font-bold text-gray-800">Model Answer (Teacher's Suggested Answer)</label>
+                            <label class="block text-sm font-bold text-gray-800">Answer Key</label>
                             <button
                                 id="reveal-answer-button"
                                 onclick="revealAnswer()" 
-                                class="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-lg shadow-md transition duration-200 ease-in-out text-sm focus:outline-none focus:ring-4 focus:ring-indigo-300"
+                                class="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-lg shadow-md text-sm focus:outline-none focus:ring-4 focus:ring-indigo-300"
                             >
                                 Show Answer
                             </button>
@@ -228,114 +194,84 @@
 
                         <div id="model-answer-container" class="hidden">
                             <textarea 
-                                id="model-answer-content" 
                                 rows="6"
                                 readonly
                                 class="w-full p-3 border border-gray-300 rounded-lg bg-indigo-50 text-gray-800 resize-none shadow-inner"
-                            >${masterQuestion.modelAnswer || 'Model answer not yet provided.'}</textarea>
+                            >${masterQuestion.modelAnswer || 'Answer not provided.'}</textarea>
                         </div>
                     </div>
                 </div>
 
                 <div class="flex justify-end mt-6 space-x-4 sticky bottom-0 bg-white pt-4 border-t">
-                    <button 
-                        onclick="closeModal('edit-modal')" 
-                        class="px-5 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium transition duration-150"
-                    >
-                        Close
-                    </button>
-                    <button 
-                        id="save-button"
-                        onclick="saveAttemptHandler()" 
-                        class="px-5 py-2 bg-micro hover:bg-yellow-500 text-gray-900 font-bold rounded-lg shadow-md transition duration-200 ease-in-out focus:outline-none focus:ring-4 focus:ring-yellow-300"
-                    >
-                        Save Notes
-                    </button>
+                    <button onclick="closeModal('edit-modal')" class="px-5 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">Close</button>
+                    <button id="save-button" onclick="saveAttemptHandler()" class="px-5 py-2 bg-micro hover:bg-yellow-500 text-gray-900 font-bold rounded-lg shadow-md focus:outline-none focus:ring-4 focus:ring-yellow-300">Save</button>
                 </div>
             `;
-            
             document.getElementById('edit-modal').classList.remove('hidden');
         }
         
-        window.revealAnswer = function() {
+        window.revealAnswer = () => {
              document.getElementById('model-answer-container')?.classList.remove('hidden');
              document.getElementById('reveal-answer-button')?.classList.add('hidden');
         }
 
-        window.saveAttemptHandler = function() {
+        window.saveAttemptHandler = () => {
             if (!currentQuestionId) return;
-
             const studentAnswer = document.getElementById('edit-answer-content').value.trim();
-            const saveButton = document.getElementById('save-button');
-            const originalText = saveButton.textContent;
-            saveButton.disabled = true;
-            saveButton.textContent = 'Saving...';
-
-            try {
-                const isAnswered = studentAnswer.length > 0;
-                saveStudentAttempt(currentQuestionId, studentAnswer, isAnswered);
+            const isAnswered = studentAnswer.length > 0;
+            if (saveStudentAttempt(currentQuestionId, studentAnswer, isAnswered)) {
                 closeModal('edit-modal');
-                handleError("Notes saved locally!", null);
-            } catch (e) {
-                handleError("Error saving local notes", e);
-            } finally {
-                saveButton.disabled = false;
-                saveButton.textContent = originalText;
+                handleError("Notes saved!", null);
             }
             renderQuestions(); 
         }
         
-        window.toggleAnswerStatus = function(questionId, event) {
+        window.toggleAnswerStatus = (questionId, event) => {
             event.stopPropagation();
-
             const currentAttempt = studentAttempts[questionId] || { studentAnswer: '', isAnswered: false };
             const newAnsweredStatus = !currentAttempt.isAnswered;
 
-            try {
-                const answerText = currentAttempt.studentAnswer || (newAnsweredStatus ? 'Marked as Answered.' : '');
-                saveStudentAttempt(questionId, answerText, newAnsweredStatus);
-                renderQuestions();
-            } catch (e) {
-                handleError("Error toggling answer status locally", e);
+            const answerText = currentAttempt.studentAnswer || (newAnsweredStatus ? 'Marked as Done.' : '');
+            if (saveStudentAttempt(questionId, answerText, newAnsweredStatus)) {
+                handleError(newAnsweredStatus ? "Marked Done!" : "Marked Draft!", null);
             }
+            renderQuestions();
         }
 
-        // --- TEACHER MODE FUNCTIONS (Using Firestore) ---
+        // --- TEACHER MODE ---
         
-        window.openTeacherEditModal = function(questionId) {
-            if (!isTeacherMode) return handleError("Not in teacher mode.", null);
+        window.openTeacherEditModal = (questionId) => {
+            if (!isTeacherMode) return handleError("Not in Admin mode.", null);
             currentQuestionId = questionId;
             const questionData = teacherQuestions.find(q => q.id === questionId);
             
-            if (!questionData) return handleError("Question data not found.", null);
+            if (!questionData) return handleError("Question not found.", null);
 
-            const modalContent = document.getElementById('edit-modal-content');
-
-            modalContent.innerHTML = `
+            document.getElementById('edit-modal-content').innerHTML = `
                 <div class="flex justify-between items-center mb-6 border-b pb-3 sticky top-0 bg-white z-10">
-                    <h3 class="text-2xl font-bold text-indigo-800">Edit Question (Teacher Admin)</h3>
-                    <button onclick="closeModal('edit-modal')" class="text-gray-400 hover:text-gray-600 p-1 transition duration-150 rounded-full hover:bg-gray-100">
+                    <h3 class="text-2xl font-bold text-indigo-800">Edit Question</h3>
+                    <button onclick="closeModal('edit-modal')" class="text-gray-400 hover:text-gray-600 p-1 transition rounded-full hover:bg-gray-100">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </button>
                 </div>
                 
                 <div class="space-y-6">
                     <div>
-                        <label for="teacher-edit-question-content" class="block text-sm font-bold text-indigo-700 mb-2">Question Content</label>
+                        <label for="teacher-edit-content" class="block text-sm font-bold text-indigo-700 mb-2">Question</label>
                         <textarea 
-                            id="teacher-edit-question-content" 
+                            id="teacher-edit-content" 
                             rows="5"
-                            placeholder="Edit the main question text."
+                            placeholder="Edit question text."
                             class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"
                         >${questionData.content || ''}</textarea>
                     </div>
                     
                     <div>
-                        <label for="teacher-edit-model-answer" class="block text-sm font-bold text-indigo-700 mb-2">Model Answer</label>
+                        <label for="teacher-edit-answer" class="block text-sm font-bold text-indigo-700 mb-2">Answer Key</label>
                         <textarea 
-                            id="teacher-edit-model-answer" 
+                            id="teacher-edit-answer" 
                             rows="7"
-                            placeholder="Edit the suggested model answer."
+                            placeholder="Edit the model answer."
                             class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"
                         >${questionData.modelAnswer || ''}</textarea>
                     </div>
@@ -344,123 +280,100 @@
                 <div class="flex justify-between mt-6 space-x-4 sticky bottom-0 bg-white pt-4 border-t">
                     <button 
                         onclick="confirmDeleteQuestion('${questionId}')" 
-                        class="px-5 py-2 bg-red-500 text-white font-bold rounded-lg hover:bg-red-600 shadow-md transition duration-200"
+                        class="px-5 py-2 bg-red-500 text-white font-bold rounded-lg hover:bg-red-600 shadow-md"
                     >
                         Delete
                     </button>
                     <div class="flex space-x-4">
-                        <button 
-                            onclick="closeModal('edit-modal')" 
-                            class="px-5 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium transition duration-150"
-                        >
-                            Cancel
-                        </button>
+                        <button onclick="closeModal('edit-modal')" class="px-5 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">Cancel</button>
                         <button 
                             id="update-button"
                             onclick="updateQuestionHandler()" 
-                            class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-md transition duration-200 focus:outline-none focus:ring-4 focus:ring-indigo-300"
+                            class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-md focus:outline-none focus:ring-4 focus:ring-indigo-300"
                         >
                             Update
                         </button>
                     </div>
                 </div>
             `;
-
             document.getElementById('edit-modal').classList.remove('hidden');
         }
 
-        window.updateQuestionHandler = async function() {
+        window.updateQuestionHandler = async () => {
             if (!currentQuestionId) return;
-
-            const content = document.getElementById('teacher-edit-question-content').value.trim();
-            const modelAnswer = document.getElementById('teacher-edit-model-answer').value.trim();
-            
-            if (content.length < 5) {
-                handleError("Question content is too short to update.", null);
-                return;
-            }
+            const content = document.getElementById('teacher-edit-content').value.trim();
+            const modelAnswer = document.getElementById('teacher-edit-answer').value.trim();
+            if (content.length < 5) return handleError("Question too short.", null);
 
             const updateButton = document.getElementById('update-button');
-            const originalText = updateButton.textContent;
             updateButton.disabled = true;
-            updateButton.textContent = 'Updating...';
 
             try {
                 await updateTeacherQuestion(currentQuestionId, content, modelAnswer);
                 closeModal('edit-modal');
-                handleError("Question updated successfully to Firestore.", null);
+                handleError("Question updated!", null);
             } catch (e) {
-                handleError("Error updating question to Firestore", e);
+                handleError("Update Failed.", e);
             } finally {
                 updateButton.disabled = false;
-                updateButton.textContent = originalText;
             }
         }
         
-        window.confirmDeleteQuestion = function(questionId) {
+        window.confirmDeleteQuestion = (questionId) => {
             currentQuestionId = questionId; 
-            document.getElementById('modal-message').textContent = "Are you sure you want to permanently delete this question? This will remove it for all users.";
-            
+            document.getElementById('modal-message').textContent = "Delete this question? This action is permanent.";
             document.getElementById('modal-confirm').onclick = () => deleteQuestionHandler(questionId);
             document.getElementById('modal-cancel').onclick = () => closeModal('custom-modal');
-
             document.getElementById('custom-modal').classList.remove('hidden');
             closeModal('edit-modal'); 
         }
 
-        window.deleteQuestionHandler = async function(questionId) {
+        window.deleteQuestionHandler = async (questionId) => {
              closeModal('custom-modal');
              try {
                 await deleteTeacherQuestion(questionId);
-                handleError("Question deleted successfully from Firestore.", null);
+                handleError("Question deleted!", null);
              } catch (e) {
-                handleError("Failed to delete question from Firestore.", e);
+                handleError("Deletion Failed.", e);
              }
         }
         
-        window.addQuestion = async function() {
-            if (!isTeacherMode) return handleError("Not in teacher mode.", null);
-
+        window.addQuestion = async () => {
+            if (!isTeacherMode) return;
             const contentInput = document.getElementById('new-question-content');
             const modelAnswerInput = document.getElementById('new-model-answer');
             const content = contentInput.value.trim();
             const modelAnswer = modelAnswerInput.value.trim();
             
-            if (content.length < 5) {
-                handleError("Question content is too short.", null);
-                return;
-            }
+            if (content.length < 5) return handleError("Question too short.", null);
 
             const saveButton = document.getElementById('add-question-button');
-            const originalText = saveButton.textContent;
             saveButton.disabled = true;
-            saveButton.textContent = 'Posting...';
 
             try {
                 await addTeacherQuestion(content, modelAnswer);
                 contentInput.value = '';
                 modelAnswerInput.value = '';
-                handleError("Question posted successfully!", null);
+                handleError("Question Posted!", null);
             } catch (e) {
-                handleError("Error posting question to Firestore", e);
+                handleError("Post Failed.", e);
             } finally {
                 saveButton.disabled = false;
-                saveButton.textContent = originalText;
             }
         }
         
-        window.setSearchTerm = function(event) {
+        window.setSearchTerm = (event) => {
             searchTerm = event.target.value.toLowerCase();
             renderQuestions();
         }
 
         // --- AUTH & UI TOGGLES ---
 
-        window.openTeacherAuthModal = function() {
+        window.openTeacherAuthModal = () => {
             document.getElementById('teacher-auth-modal').classList.remove('hidden');
         }
         
-        window.loginAsTeacher = function() {
+        window.loginAsTeacher = () => {
             const password = document.getElementById('teacher-password-input').value;
             const msgBox = document.getElementById('teacher-auth-message');
             
@@ -468,19 +381,19 @@
                 isTeacherMode = true;
                 closeModal('teacher-auth-modal');
                 renderTeacherUI();
-                handleError("Welcome Ms. Ip! Teacher mode activated.", null);
+                handleError("Admin activated.", null);
             } else {
                 msgBox.textContent = "Incorrect password.";
                 msgBox.classList.remove('hidden');
             }
         }
         
-        window.outOfTeacherMode = function() {
+        window.outOfTeacherMode = () => {
             isTeacherMode = false;
             document.getElementById('teacher-password-input').value = '';
             document.getElementById('teacher-auth-message').classList.add('hidden');
             renderTeacherUI();
-            handleError("Teacher mode deactivated.", null);
+            handleError("Admin deactivated.", null);
         }
 
         // --- RENDERING ---
@@ -489,21 +402,16 @@
             const container = document.getElementById('teacher-button-container');
             const inputArea = document.getElementById('teacher-input-area');
             
-            if (isTeacherMode) {
-                container.innerHTML = `
-                    <button onclick="outOfTeacherMode()" class="px-4 py-2 bg-red-500 text-white font-bold rounded-lg hover:bg-red-600 transition duration-150 shadow-md text-sm">
-                        Exit Admin
+            container.innerHTML = isTeacherMode ? `
+                    <button onclick="outOfTeacherMode()" class="px-4 py-2 bg-red-500 text-white font-bold rounded-lg hover:bg-red-600 shadow-md text-sm">
+                        Exit
+                    </button>
+                ` : `
+                    <button onclick="openTeacherAuthModal()" class="px-4 py-2 bg-indigo-500 text-white font-bold rounded-lg hover:bg-indigo-600 shadow-md text-sm">
+                        Admin
                     </button>
                 `;
-                inputArea.classList.remove('hidden');
-            } else {
-                container.innerHTML = `
-                    <button onclick="openTeacherAuthModal()" class="px-4 py-2 bg-indigo-500 text-white font-bold rounded-lg hover:bg-indigo-600 transition duration-150 shadow-md text-sm">
-                        Teacher Login
-                    </button>
-                `;
-                inputArea.classList.add('hidden');
-            }
+            inputArea.classList.toggle('hidden', !isTeacherMode);
             renderQuestions(); 
         }
 
@@ -511,15 +419,12 @@
             const list = document.getElementById('questions-list');
             
             const filteredQuestions = teacherQuestions.filter(q => {
-                const contentMatch = q.content.toLowerCase().includes(searchTerm);
-                const answerMatch = q.modelAnswer?.toLowerCase().includes(searchTerm) || false;
-                const studentAnswerMatch = studentAttempts[q.id]?.studentAnswer?.toLowerCase().includes(searchTerm) || false;
-                
-                return contentMatch || answerMatch || studentAnswerMatch;
+                const search = searchTerm;
+                return q.content.toLowerCase().includes(search) || q.modelAnswer?.toLowerCase().includes(search) || studentAttempts[q.id]?.studentAnswer?.toLowerCase().includes(search);
             });
 
             if (filteredQuestions.length === 0) {
-                list.innerHTML = `<li class="p-5 text-center text-gray-500">${teacherQuestions.length === 0 ? 'No questions posted yet.' : 'No results found.'}</li>`;
+                list.innerHTML = `<li class="p-5 text-center text-gray-500">${teacherQuestions.length === 0 ? 'No questions posted.' : 'No results found.'}</li>`;
                 return;
             }
 
@@ -530,21 +435,21 @@
                 const statusText = answered ? 'Done' : 'Draft';
                 
                 return `
-                    <li class="p-5 hover:bg-gray-50 transition duration-150 cursor-pointer flex justify-between items-start" onclick="handleQuestionClick('${q.id}')">
+                    <li class="p-5 hover:bg-gray-50 transition cursor-pointer flex justify-between items-start" onclick="handleQuestionClick('${q.id}')">
                         <div class="flex-1 min-w-0 pr-4">
                             <p class="text-gray-800 font-semibold mb-1">${q.content}</p>
-                            ${attempt?.studentAnswer ? `<p class="text-sm text-gray-500 truncate mt-1">Your Notes: ${attempt.studentAnswer}</p>` : `<p class="text-sm text-gray-400 mt-1">Click to add your notes.</p>`}
+                            ${attempt?.studentAnswer ? `<p class="text-sm text-gray-500 truncate mt-1">Notes: ${attempt.studentAnswer}</p>` : `<p class="text-sm text-gray-400 mt-1">Click to add notes.</p>`}
                         </div>
                         <div class="flex items-center space-x-3 flex-shrink-0">
                             ${isTeacherMode ? `
-                                <button onclick="event.stopPropagation(); openTeacherEditModal('${q.id}')" class="p-2 text-indigo-500 hover:text-indigo-700 rounded-full hover:bg-indigo-50 transition duration-150" title="Edit Question">
+                                <button onclick="event.stopPropagation(); openTeacherEditModal('${q.id}')" class="p-2 text-indigo-500 hover:text-indigo-700 rounded-full hover:bg-indigo-50 transition" title="Edit">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
                                 </button>
                             ` : `
                                 <div class="px-3 py-1 text-xs font-semibold rounded-full border ${statusClass}">
                                     ${statusText}
                                 </div>
-                                <button onclick="toggleAnswerStatus('${q.id}', event)" class="p-2 text-gray-500 hover:text-micro rounded-full hover:bg-yellow-50 transition duration-150" title="${answered ? 'Mark as Draft' : 'Mark as Done'}">
+                                <button onclick="toggleAnswerStatus('${q.id}', event)" class="p-2 text-gray-500 hover:text-micro rounded-full hover:bg-yellow-50 transition" title="${answered ? 'Mark Draft' : 'Mark Done'}">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
                                 </button>
                             `}
@@ -558,7 +463,7 @@
     </script>
     <style>
         :root {
-            --primary-color: #FBBF24; /* Tailwind yellow-400/500 equivalent */
+            --primary-color: #FBBF24;
         }
         body {
             font-family: 'Inter', sans-serif;
@@ -581,54 +486,47 @@
                     Ms. Ip's <span class="text-micro">Econ Questions</span>
                 </h1>
                 <p class="mt-2 text-lg text-gray-600">
-                    Form 4 Block 2 Question Bank
+                    Question Bank (F.4 B.2)
                 </p>
             </div>
-            <!-- Teacher Mode Toggle Button Container -->
-            <div id="teacher-button-container">
-                <!-- Content set by renderTeacherUI() -->
-            </div>
+            <div id="teacher-button-container"></div>
         </div>
-        
-        <!-- Connection status removed for cleaner UI. Only critical errors will show. -->
     </header>
 
     <main class="w-full max-w-4xl bg-white shadow-2xl rounded-2xl overflow-hidden">
         
-        <div id="error-message" class="hidden px-4 py-3 rounded-t-xl" role="alert">
-            <span class="block sm:inline">An error occurred: </span>
-        </div>
+        <div id="error-message" class="hidden px-4 py-3 rounded-t-xl" role="alert"></div>
         
-        <!-- TEACHER QUESTION POSTING AREA -->
+        <!-- TEACHER POSTING AREA -->
         <div id="teacher-input-area" class="hidden p-6 sm:p-8 bg-indigo-50 border-b border-indigo-200">
-            <h3 class="text-xl font-bold text-indigo-800 mb-4">Post New Question</h3>
+            <h3 class="text-xl font-bold text-indigo-800 mb-4">New Question</h3>
             <div class="space-y-4">
                 <div>
-                    <label for="new-question-content" class="sr-only">Question Content</label>
-                    <textarea id="new-question-content" rows="3" placeholder="Enter the new economics question here..." class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"></textarea>
+                    <label for="new-question-content" class="sr-only">Question</label>
+                    <textarea id="new-question-content" rows="3" placeholder="Enter question..." class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"></textarea>
                 </div>
                 <div>
-                    <label for="new-model-answer" class="sr-only">Model Answer</label>
-                    <textarea id="new-model-answer" rows="3" placeholder="Enter the model answer..." class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"></textarea>
+                    <label for="new-model-answer" class="sr-only">Answer Key</label>
+                    <textarea id="new-model-answer" rows="3" placeholder="Enter answer key..." class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"></textarea>
                 </div>
                 <div class="flex justify-end">
-                    <button id="add-question-button" onclick="addQuestion()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-lg transition duration-200 focus:outline-none focus:ring-4 focus:ring-indigo-300">
-                        Post Question
+                    <button id="add-question-button" onclick="addQuestion()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-lg focus:outline-none focus:ring-4 focus:ring-indigo-300">
+                        Post
                     </button>
                 </div>
             </div>
         </div>
 
         <div class="p-0">
-            <h2 class="text-2xl font-bold text-gray-800 px-6 sm:px-8 pt-6 sm:pt-8 mb-3">Question List</h2>
+            <h2 class="text-2xl font-bold text-gray-800 px-6 sm:px-8 pt-6 sm:pt-8 mb-3">Questions</h2>
             
             <!-- Search Bar -->
             <div class="px-6 sm:px-8 mb-4">
                 <input 
                     type="text" 
-                    placeholder="Search questions or your notes..."
+                    placeholder="Search all content..."
                     oninput="setSearchTerm(event)"
-                    class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-micro focus:border-micro transition duration-150 shadow-inner"
+                    class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-micro focus:border-micro shadow-inner"
                     aria-label="Search questions"
                 >
             </div>
@@ -639,11 +537,10 @@
         </div>
     </main>
     
-    <!-- Teacher Authentication Modal -->
-    <div id="teacher-auth-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 transition-opacity duration-300">
-        <div class="bg-white rounded-xl shadow-2xl p-8 w-11/12 max-w-sm transform transition-all duration-300 scale-100">
+    <!-- Admin Authentication Modal -->
+    <div id="teacher-auth-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-2xl p-8 w-11/12 max-w-sm">
             <h3 class="text-2xl font-bold text-gray-800 mb-4 text-center">Admin Login</h3>
-            <p class="text-gray-600 mb-4 text-center">Access teacher tools.</p>
             
             <input 
                 type="password" 
@@ -656,36 +553,28 @@
             <p id="teacher-auth-message" class="text-sm text-red-600 mb-4 hidden"></p>
 
             <div class="flex justify-end space-x-3">
-                <button onclick="closeModal('teacher-auth-modal')" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium transition duration-150">
-                    Cancel
-                </button>
-                <button onclick="loginAsTeacher()" class="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 font-bold transition duration-150 shadow-md">
-                    Login
-                </button>
+                <button onclick="closeModal('teacher-auth-modal')" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">Cancel</button>
+                <button onclick="loginAsTeacher()" class="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 font-bold shadow-md">Login</button>
             </div>
         </div>
     </div>
     
-    <!-- Custom Confirmation Modal Structure (Used for deleting questions) -->
-    <div id="custom-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 transition-opacity duration-300">
-        <div class="bg-white rounded-xl shadow-2xl p-6 w-11/12 max-w-md transform transition-all duration-300 scale-100">
-            <h3 class="text-xl font-bold text-gray-800 mb-4">Confirm Deletion</h3>
+    <!-- Custom Confirmation Modal -->
+    <div id="custom-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-2xl p-6 w-11/12 max-w-md">
+            <h3 class="text-xl font-bold text-gray-800 mb-4">Confirm</h3>
             <p id="modal-message" class="text-gray-600 mb-6"></p>
             <div class="flex justify-end space-x-4">
-                <button id="modal-cancel" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium transition duration-150">
-                    Cancel
-                </button>
-                <button id="modal-confirm" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium transition duration-150">
-                    Delete
-                </button>
+                <button id="modal-cancel" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium">Cancel</button>
+                <button id="modal-confirm" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium">Delete</button>
             </div>
         </div>
     </div>
     
-    <!-- Edit/Attempt Modal Structure (Dynamic Content) -->
+    <!-- Edit/Attempt Modal -->
     <div id="edit-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 overflow-y-auto">
-        <div id="edit-modal-content" class="bg-white rounded-xl shadow-2xl p-6 w-11/12 max-w-2xl my-8 transform transition-all duration-300 scale-100">
-            <!-- Content will be injected dynamically -->
+        <div id="edit-modal-content" class="bg-white rounded-xl shadow-2xl p-6 w-11/12 max-w-2xl my-8">
+            <!-- Dynamic Content -->
         </div>
     </div>
 
