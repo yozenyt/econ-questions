@@ -7,25 +7,26 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <script type="module">
-        // --- FIREBASE IMPORTS ---
+        // --- FIREBASE IMPORTS (Using CDN paths for environment compatibility) ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, collection, doc, setDoc, query, onSnapshot, updateDoc, deleteDoc, addDoc, serverTimestamp, setLogLevel 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- GLOBAL VARIABLES (Provided by Canvas Environment) ---
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        // --- USER-PROVIDED FIREBASE CONFIGURATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDtP6jaexHJ6FDYPAlyyZFqf3CVagiaEvA",
+            authDomain: "econ-questions.firebaseapp.com",
+            projectId: "econ-questions",
+            storageBucket: "econ-questions.firebasestorage.app",
+            messagingSenderId: "733855268510",
+            appId: "1:733855268510:web:a39c12b73e968a4bb2858f",
+            measurementId: "G-6Z5VHKQKG0"
+        };
         
-        // --- FIREBASE APP SETUP ---
-        let db;
-        let auth;
-        let userId = null;
-        let isAuthReady = false;
-
         // --- APPLICATION STATE ---
+        let db;
         let teacherQuestions = []; 
         let studentAttempts = {}; 
         let searchTerm = ''; 
@@ -34,124 +35,91 @@
         const TEACHER_PASSWORD = "EconBuddy"; 
         
         // --- FIREBASE PATH HELPERS ---
-        const PUBLIC_QUESTIONS_PATH = `artifacts/${appId}/public/data/questions`;
-        const getUserAttemptsPath = (uid) => `artifacts/${appId}/users/${uid}/attempts`;
+        const QUESTIONS_COLLECTION_PATH = `questions`;
+        
+        // --- LOCAL STORAGE KEY ---
+        const LOCAL_STORAGE_KEY = 'econ_student_attempts';
 
         // ----------------------------------------------------
-        // INITIALIZATION AND AUTHENTICATION
+        // INITIALIZATION AND CONNECTION
         // ----------------------------------------------------
 
-        async function initFirebase() {
+        function initFirebase() {
             try {
-                // Set Firebase logging level to debug for console visibility
                 setLogLevel('debug');
-                
                 const app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
                 db = getFirestore(app);
-
-                document.getElementById('connection-status').textContent = 'Authenticating...';
+                getAuth(app); 
                 
-                // Sign in using the provided token or anonymously
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
-                // Listen for Auth State Changes
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        userId = user.uid;
-                        isAuthReady = true;
-                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
-                        document.getElementById('connection-status').textContent = 'Connected';
-                        document.getElementById('connection-status').classList.add('bg-green-500');
-                        document.getElementById('connection-status').classList.remove('bg-yellow-500');
-                        
-                        // Start listeners only after auth is ready
-                        startFirestoreListeners();
-                    } else {
-                        isAuthReady = false;
-                        document.getElementById('connection-status').textContent = 'Disconnected';
-                        document.getElementById('connection-status').classList.add('bg-red-500');
-                        document.getElementById('connection-status').classList.remove('bg-yellow-500');
-                    }
-                    // RENDER UI: Ensure buttons show up after auth state is known
-                    renderTeacherUI(); 
-                });
-
+                startListeners();
+                
             } catch (e) {
-                handleError("Connection Failed", e);
-                document.getElementById('connection-status').textContent = 'Failed';
-                document.getElementById('connection-status').classList.add('bg-red-500');
-                document.getElementById('connection-status').classList.remove('bg-yellow-500');
+                handleError("CRITICAL: Connection Failed. Teacher questions may not load.", e);
             }
         }
         
-        function startFirestoreListeners() {
-            if (!isAuthReady) return;
-            
-            // 1. Listen for ALL public questions
-            const q = query(collection(db, PUBLIC_QUESTIONS_PATH));
+        function startListeners() {
+            // 1. Load Student Attempts from Local Storage
+            loadStudentAttempts();
+
+            // 2. Listen for ALL public questions
+            const q = query(collection(db, QUESTIONS_COLLECTION_PATH));
             onSnapshot(q, (snapshot) => {
                 teacherQuestions = snapshot.docs.map(doc => ({
                     id: doc.id,
                     ...doc.data()
-                })).sort((a, b) => (b.created_at?.toMillis() || 0) - (a.created_at?.toMillis() || 0)); // Sort by creation time
+                })).sort((a, b) => (b.created_at?.toMillis() || 0) - (a.created_at?.toMillis() || 0));
+                
                 renderQuestions();
             }, (error) => {
-                handleError("Error listening to questions", error);
+                handleError("Error loading questions from Firestore.", error);
             });
-
-            // 2. Listen for the student's personal attempts
-            const attemptsQuery = query(collection(db, getUserAttemptsPath(userId)));
-            onSnapshot(attemptsQuery, (snapshot) => {
-                // Convert array of attempt docs to the required map structure {questionId: {answer, isAnswered}}
-                studentAttempts = snapshot.docs.reduce((acc, doc) => {
-                    const data = doc.data();
-                    acc[doc.id] = { 
-                        studentAnswer: data.studentAnswer || '', 
-                        isAnswered: data.isAnswered || false 
-                    };
-                    return acc;
-                }, {});
-                renderQuestions();
-            }, (error) => {
-                handleError("Error listening to attempts", error);
-            });
-        }
-
-        // ----------------------------------------------------
-        // FIRESTORE API WRAPPERS
-        // ----------------------------------------------------
-
-        // POST/PUT student attempt
-        async function saveStudentAttempt(questionId, studentAnswer, isAnswered) {
-            if (!userId) throw new Error("User not authenticated.");
-            const attemptRef = doc(db, getUserAttemptsPath(userId), questionId);
             
-            await setDoc(attemptRef, {
-                studentAnswer: studentAnswer,
-                isAnswered: isAnswered,
-                updated_at: serverTimestamp() 
-            }, { merge: true });
+            renderTeacherUI(); 
         }
 
-        // POST new question
+        // ----------------------------------------------------
+        // STUDENT LOCAL STORAGE HANDLERS
+        // ----------------------------------------------------
+
+        function loadStudentAttempts() {
+            try {
+                const data = localStorage.getItem(LOCAL_STORAGE_KEY);
+                if (data) {
+                    studentAttempts = JSON.parse(data);
+                }
+            } catch (e) {
+                console.warn("Could not load local data. Browser storage may be restricted.");
+            }
+        }
+        
+        function saveStudentAttempt(questionId, studentAnswer, isAnswered) {
+            studentAttempts[questionId] = { studentAnswer, isAnswered };
+            try {
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(studentAttempts));
+                return true;
+            } catch (e) {
+                handleError("Error: Your attempt could not be saved locally.", e);
+                return false;
+            }
+        }
+
+        // ----------------------------------------------------
+        // TEACHER FIRESTORE API WRAPPERS
+        // ----------------------------------------------------
+
         async function addTeacherQuestion(content, modelAnswer) {
-            const questionsColRef = collection(db, PUBLIC_QUESTIONS_PATH);
+            const questionsColRef = collection(db, QUESTIONS_COLLECTION_PATH);
             await addDoc(questionsColRef, {
                 content: content,
                 modelAnswer: modelAnswer,
                 created_at: serverTimestamp(),
-                teacherId: userId
+                teacherId: "MsIp" 
             });
         }
         
-        // PUT/UPDATE question details
         async function updateTeacherQuestion(questionId, content, modelAnswer) {
-            const questionRef = doc(db, PUBLIC_QUESTIONS_PATH, questionId);
+            const questionRef = doc(db, QUESTIONS_COLLECTION_PATH, questionId);
             await updateDoc(questionRef, {
                 content: content,
                 modelAnswer: modelAnswer,
@@ -159,9 +127,8 @@
             });
         }
         
-        // DELETE question
         async function deleteTeacherQuestion(questionId) {
-            const questionRef = doc(db, PUBLIC_QUESTIONS_PATH, questionId);
+            const questionRef = doc(db, QUESTIONS_COLLECTION_PATH, questionId);
             await deleteDoc(questionRef);
         }
 
@@ -171,8 +138,7 @@
         
         function handleError(message, error) {
              const errorBox = document.getElementById('error-message');
-             // Strip persistence notes from user-facing messages
-             const cleanMessage = message.replace(' (Data is persistent)', '').replace(' (Persistent)', '');
+             const cleanMessage = message; 
              errorBox.textContent = cleanMessage + (error ? `: ${error.message}` : '');
             
             errorBox.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-yellow-100', 'text-yellow-700', 'bg-green-100', 'text-green-700');
@@ -208,10 +174,9 @@
             }
         }
 
-        // --- STUDENT MODE FUNCTIONS ---
+        // --- STUDENT MODE FUNCTIONS (Using LocalStorage) ---
 
         window.openStudentAttemptModal = function(questionId) {
-            if (!isAuthReady) return handleError("Wait for database connection.", null);
             currentQuestionId = questionId;
             const masterQuestion = teacherQuestions.find(q => q.id === questionId);
             const studentAttempt = studentAttempts[questionId] || { studentAnswer: '', isAnswered: false };
@@ -222,7 +187,7 @@
             
             modalContent.innerHTML = `
                 <div class="flex justify-between items-center mb-6 border-b pb-3 sticky top-0 bg-white z-10">
-                    <h3 class="text-2xl font-bold text-gray-800">Question & Your Attempt</h3>
+                    <h3 class="text-2xl font-bold text-gray-800">Your Attempt</h3>
                     <button onclick="closeModal('edit-modal')" class="text-gray-400 hover:text-gray-600 p-1 transition duration-150 rounded-full hover:bg-gray-100">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </button>
@@ -230,7 +195,7 @@
                 
                 <div class="space-y-6">
                     <div>
-                        <label for="edit-question-content-display" class="block text-sm font-bold text-gray-800 mb-2">Teacher's Question</label>
+                        <label for="edit-question-content-display" class="block text-sm font-bold text-gray-800 mb-2">Question</label>
                         <textarea 
                             id="edit-question-content-display" 
                             rows="3"
@@ -240,24 +205,24 @@
                     </div>
                     
                     <div>
-                        <label for="edit-answer-content" class="block text-sm font-bold text-gray-700 mb-2">Your Answer / Notes / Attempt</label>
+                        <label for="edit-answer-content" class="block text-sm font-bold text-gray-700 mb-2">Your Answer / Notes (Saved Privately)</label>
                         <textarea 
                             id="edit-answer-content" 
                             rows="6"
-                            placeholder="Type your attempt or notes here. This is private and persistent."
+                            placeholder="Type your attempt or notes here..."
                             class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-micro focus:border-micro transition duration-150 resize-none shadow-inner text-gray-900"
                         >${studentAttempt.studentAnswer || ''}</textarea>
                     </div>
                     
                     <div>
                         <div class="flex justify-between items-center mb-2">
-                            <label class="block text-sm font-bold text-gray-800">Model Answer (Ms. Ip's Answer)</label>
+                            <label class="block text-sm font-bold text-gray-800">Model Answer (Teacher's Suggested Answer)</label>
                             <button
                                 id="reveal-answer-button"
                                 onclick="revealAnswer()" 
                                 class="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-lg shadow-md transition duration-200 ease-in-out text-sm focus:outline-none focus:ring-4 focus:ring-indigo-300"
                             >
-                                Reveal Model Answer
+                                Show Answer
                             </button>
                         </div>
 
@@ -267,7 +232,7 @@
                                 rows="6"
                                 readonly
                                 class="w-full p-3 border border-gray-300 rounded-lg bg-indigo-50 text-gray-800 resize-none shadow-inner"
-                            >${masterQuestion.modelAnswer || 'Model answer not yet provided by teacher.'}</textarea>
+                            >${masterQuestion.modelAnswer || 'Model answer not yet provided.'}</textarea>
                         </div>
                     </div>
                 </div>
@@ -277,14 +242,14 @@
                         onclick="closeModal('edit-modal')" 
                         class="px-5 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium transition duration-150"
                     >
-                        Cancel
+                        Close
                     </button>
                     <button 
                         id="save-button"
                         onclick="saveAttemptHandler()" 
                         class="px-5 py-2 bg-micro hover:bg-yellow-500 text-gray-900 font-bold rounded-lg shadow-md transition duration-200 ease-in-out focus:outline-none focus:ring-4 focus:ring-yellow-300"
                     >
-                        Save Attempt
+                        Save Notes
                     </button>
                 </div>
             `;
@@ -297,7 +262,7 @@
              document.getElementById('reveal-answer-button')?.classList.add('hidden');
         }
 
-        window.saveAttemptHandler = async function() {
+        window.saveAttemptHandler = function() {
             if (!currentQuestionId) return;
 
             const studentAnswer = document.getElementById('edit-answer-content').value.trim();
@@ -308,36 +273,37 @@
 
             try {
                 const isAnswered = studentAnswer.length > 0;
-                await saveStudentAttempt(currentQuestionId, studentAnswer, isAnswered);
+                saveStudentAttempt(currentQuestionId, studentAnswer, isAnswered);
                 closeModal('edit-modal');
-                handleError("Attempt saved successfully!", null);
+                handleError("Notes saved locally!", null);
             } catch (e) {
-                handleError("Error saving attempt", e);
+                handleError("Error saving local notes", e);
             } finally {
                 saveButton.disabled = false;
                 saveButton.textContent = originalText;
             }
+            renderQuestions(); 
         }
         
-        window.toggleAnswerStatus = async function(questionId, event) {
+        window.toggleAnswerStatus = function(questionId, event) {
             event.stopPropagation();
-            if (!isAuthReady) return handleError("Wait for database connection.", null);
 
             const currentAttempt = studentAttempts[questionId] || { studentAnswer: '', isAnswered: false };
             const newAnsweredStatus = !currentAttempt.isAnswered;
 
             try {
                 const answerText = currentAttempt.studentAnswer || (newAnsweredStatus ? 'Marked as Answered.' : '');
-                await saveStudentAttempt(questionId, answerText, newAnsweredStatus);
+                saveStudentAttempt(questionId, answerText, newAnsweredStatus);
+                renderQuestions();
             } catch (e) {
-                handleError("Error toggling answer status", e);
+                handleError("Error toggling answer status locally", e);
             }
         }
 
-        // --- TEACHER MODE FUNCTIONS ---
+        // --- TEACHER MODE FUNCTIONS (Using Firestore) ---
         
         window.openTeacherEditModal = function(questionId) {
-            if (!isTeacherMode || !isAuthReady) return handleError("Not in teacher mode or database not ready.", null);
+            if (!isTeacherMode) return handleError("Not in teacher mode.", null);
             currentQuestionId = questionId;
             const questionData = teacherQuestions.find(q => q.id === questionId);
             
@@ -347,7 +313,7 @@
 
             modalContent.innerHTML = `
                 <div class="flex justify-between items-center mb-6 border-b pb-3 sticky top-0 bg-white z-10">
-                    <h3 class="text-2xl font-bold text-gray-800">Edit Question (Admin)</h3>
+                    <h3 class="text-2xl font-bold text-indigo-800">Edit Question (Teacher Admin)</h3>
                     <button onclick="closeModal('edit-modal')" class="text-gray-400 hover:text-gray-600 p-1 transition duration-150 rounded-full hover:bg-gray-100">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                     </button>
@@ -380,7 +346,7 @@
                         onclick="confirmDeleteQuestion('${questionId}')" 
                         class="px-5 py-2 bg-red-500 text-white font-bold rounded-lg hover:bg-red-600 shadow-md transition duration-200"
                     >
-                        Delete Question
+                        Delete
                     </button>
                     <div class="flex space-x-4">
                         <button 
@@ -394,7 +360,7 @@
                             onclick="updateQuestionHandler()" 
                             class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-md transition duration-200 focus:outline-none focus:ring-4 focus:ring-indigo-300"
                         >
-                            Update Question
+                            Update
                         </button>
                     </div>
                 </div>
@@ -422,9 +388,9 @@
             try {
                 await updateTeacherQuestion(currentQuestionId, content, modelAnswer);
                 closeModal('edit-modal');
-                handleError("Question updated successfully!", null);
+                handleError("Question updated successfully to Firestore.", null);
             } catch (e) {
-                handleError("Error updating question", e);
+                handleError("Error updating question to Firestore", e);
             } finally {
                 updateButton.disabled = false;
                 updateButton.textContent = originalText;
@@ -433,7 +399,7 @@
         
         window.confirmDeleteQuestion = function(questionId) {
             currentQuestionId = questionId; 
-            document.getElementById('modal-message').textContent = "Are you sure you want to permanently delete this question? This action cannot be undone and will affect all students.";
+            document.getElementById('modal-message').textContent = "Are you sure you want to permanently delete this question? This will remove it for all users.";
             
             document.getElementById('modal-confirm').onclick = () => deleteQuestionHandler(questionId);
             document.getElementById('modal-cancel').onclick = () => closeModal('custom-modal');
@@ -446,14 +412,14 @@
              closeModal('custom-modal');
              try {
                 await deleteTeacherQuestion(questionId);
-                handleError("Question deleted successfully.", null);
+                handleError("Question deleted successfully from Firestore.", null);
              } catch (e) {
-                handleError("Failed to delete question.", e);
+                handleError("Failed to delete question from Firestore.", e);
              }
         }
         
         window.addQuestion = async function() {
-            if (!isTeacherMode || !isAuthReady) return handleError("Not in teacher mode or database not ready.", null);
+            if (!isTeacherMode) return handleError("Not in teacher mode.", null);
 
             const contentInput = document.getElementById('new-question-content');
             const modelAnswerInput = document.getElementById('new-model-answer');
@@ -476,7 +442,7 @@
                 modelAnswerInput.value = '';
                 handleError("Question posted successfully!", null);
             } catch (e) {
-                handleError("Error posting question", e);
+                handleError("Error posting question to Firestore", e);
             } finally {
                 saveButton.disabled = false;
                 saveButton.textContent = originalText;
@@ -526,7 +492,7 @@
             if (isTeacherMode) {
                 container.innerHTML = `
                     <button onclick="outOfTeacherMode()" class="px-4 py-2 bg-red-500 text-white font-bold rounded-lg hover:bg-red-600 transition duration-150 shadow-md text-sm">
-                        Exit Teacher Mode
+                        Exit Admin
                     </button>
                 `;
                 inputArea.classList.remove('hidden');
@@ -538,7 +504,7 @@
                 `;
                 inputArea.classList.add('hidden');
             }
-            renderQuestions(); // Re-render to show edit buttons
+            renderQuestions(); 
         }
 
         function renderQuestions() {
@@ -553,7 +519,7 @@
             });
 
             if (filteredQuestions.length === 0) {
-                list.innerHTML = `<li class="p-5 text-center text-gray-500">${teacherQuestions.length === 0 ? 'No questions posted yet.' : 'No results found for your search.'}</li>`;
+                list.innerHTML = `<li class="p-5 text-center text-gray-500">${teacherQuestions.length === 0 ? 'No questions posted yet.' : 'No results found.'}</li>`;
                 return;
             }
 
@@ -561,13 +527,13 @@
                 const attempt = studentAttempts[q.id];
                 const answered = attempt?.isAnswered || false;
                 const statusClass = answered ? 'bg-green-100 text-green-700 border-green-300' : 'bg-yellow-50 text-yellow-700 border-yellow-300';
-                const statusText = answered ? 'Answered' : 'Draft/Unanswered';
+                const statusText = answered ? 'Done' : 'Draft';
                 
                 return `
                     <li class="p-5 hover:bg-gray-50 transition duration-150 cursor-pointer flex justify-between items-start" onclick="handleQuestionClick('${q.id}')">
                         <div class="flex-1 min-w-0 pr-4">
                             <p class="text-gray-800 font-semibold mb-1">${q.content}</p>
-                            ${attempt?.studentAnswer ? `<p class="text-sm text-gray-500 truncate mt-1">Your Draft: ${attempt.studentAnswer}</p>` : `<p class="text-sm text-gray-400 mt-1">Click to add your attempt/notes.</p>`}
+                            ${attempt?.studentAnswer ? `<p class="text-sm text-gray-500 truncate mt-1">Your Notes: ${attempt.studentAnswer}</p>` : `<p class="text-sm text-gray-400 mt-1">Click to add your notes.</p>`}
                         </div>
                         <div class="flex items-center space-x-3 flex-shrink-0">
                             ${isTeacherMode ? `
@@ -578,7 +544,7 @@
                                 <div class="px-3 py-1 text-xs font-semibold rounded-full border ${statusClass}">
                                     ${statusText}
                                 </div>
-                                <button onclick="toggleAnswerStatus('${q.id}', event)" class="p-2 text-gray-500 hover:text-micro rounded-full hover:bg-yellow-50 transition duration-150" title="${answered ? 'Mark as Unanswered' : 'Mark as Answered'}">
+                                <button onclick="toggleAnswerStatus('${q.id}', event)" class="p-2 text-gray-500 hover:text-micro rounded-full hover:bg-yellow-50 transition duration-150" title="${answered ? 'Mark as Draft' : 'Mark as Done'}">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
                                 </button>
                             `}
@@ -623,12 +589,8 @@
                 <!-- Content set by renderTeacherUI() -->
             </div>
         </div>
-        <div class="flex justify-between items-center mt-1">
-            <p id="user-id-display" class="text-xs text-gray-500">User ID: Connecting...</p>
-             <div id="connection-status" class="px-2 py-0.5 text-xs font-bold rounded-full text-white bg-yellow-500 transition duration-300 shadow-sm">
-                Connecting...
-            </div>
-        </div>
+        
+        <!-- Connection status removed for cleaner UI. Only critical errors will show. -->
     </header>
 
     <main class="w-full max-w-4xl bg-white shadow-2xl rounded-2xl overflow-hidden">
@@ -637,17 +599,17 @@
             <span class="block sm:inline">An error occurred: </span>
         </div>
         
-        <!-- TEACHER QUESTION POSTING AREA (Hidden by default) -->
+        <!-- TEACHER QUESTION POSTING AREA -->
         <div id="teacher-input-area" class="hidden p-6 sm:p-8 bg-indigo-50 border-b border-indigo-200">
             <h3 class="text-xl font-bold text-indigo-800 mb-4">Post New Question</h3>
             <div class="space-y-4">
                 <div>
-                    <label for="new-question-content" class="block text-sm font-semibold text-indigo-700 mb-1">Question Content</label>
+                    <label for="new-question-content" class="sr-only">Question Content</label>
                     <textarea id="new-question-content" rows="3" placeholder="Enter the new economics question here..." class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"></textarea>
                 </div>
                 <div>
-                    <label for="new-model-answer" class="block text-sm font-semibold text-indigo-700 mb-1">Model Answer (Optional)</label>
-                    <textarea id="new-model-answer" rows="3" placeholder="Enter the model answer or suggested response..." class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"></textarea>
+                    <label for="new-model-answer" class="sr-only">Model Answer</label>
+                    <textarea id="new-model-answer" rows="3" placeholder="Enter the model answer..." class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"></textarea>
                 </div>
                 <div class="flex justify-end">
                     <button id="add-question-button" onclick="addQuestion()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-lg transition duration-200 focus:outline-none focus:ring-4 focus:ring-indigo-300">
@@ -658,13 +620,13 @@
         </div>
 
         <div class="p-0">
-            <h2 class="text-2xl font-bold text-gray-800 px-6 sm:px-8 pt-6 sm:pt-8 mb-3">Questions Posted by Ms. Ip</h2>
+            <h2 class="text-2xl font-bold text-gray-800 px-6 sm:px-8 pt-6 sm:pt-8 mb-3">Question List</h2>
             
             <!-- Search Bar -->
             <div class="px-6 sm:px-8 mb-4">
                 <input 
                     type="text" 
-                    placeholder="Search questions, model answers, or your notes..."
+                    placeholder="Search questions or your notes..."
                     oninput="setSearchTerm(event)"
                     class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-micro focus:border-micro transition duration-150 shadow-inner"
                     aria-label="Search questions"
@@ -680,13 +642,13 @@
     <!-- Teacher Authentication Modal -->
     <div id="teacher-auth-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 transition-opacity duration-300">
         <div class="bg-white rounded-xl shadow-2xl p-8 w-11/12 max-w-sm transform transition-all duration-300 scale-100">
-            <h3 class="text-2xl font-bold text-gray-800 mb-4 text-center">Teacher Login</h3>
-            <p class="text-gray-600 mb-4 text-center">Enter the teacher password to access administrative tools.</p>
+            <h3 class="text-2xl font-bold text-gray-800 mb-4 text-center">Admin Login</h3>
+            <p class="text-gray-600 mb-4 text-center">Access teacher tools.</p>
             
             <input 
                 type="password" 
                 id="teacher-password-input" 
-                placeholder="Enter password" 
+                placeholder="Password" 
                 class="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-micro focus:border-micro shadow-inner"
                 onkeypress="if(event.key === 'Enter') loginAsTeacher()"
             >
@@ -707,14 +669,14 @@
     <!-- Custom Confirmation Modal Structure (Used for deleting questions) -->
     <div id="custom-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 transition-opacity duration-300">
         <div class="bg-white rounded-xl shadow-2xl p-6 w-11/12 max-w-md transform transition-all duration-300 scale-100">
-            <h3 class="text-xl font-bold text-gray-800 mb-4">Confirmation</h3>
+            <h3 class="text-xl font-bold text-gray-800 mb-4">Confirm Deletion</h3>
             <p id="modal-message" class="text-gray-600 mb-6"></p>
             <div class="flex justify-end space-x-4">
                 <button id="modal-cancel" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium transition duration-150">
                     Cancel
                 </button>
                 <button id="modal-confirm" class="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium transition duration-150">
-                    Confirm Delete
+                    Delete
                 </button>
             </div>
         </div>
@@ -723,7 +685,7 @@
     <!-- Edit/Attempt Modal Structure (Dynamic Content) -->
     <div id="edit-modal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 overflow-y-auto">
         <div id="edit-modal-content" class="bg-white rounded-xl shadow-2xl p-6 w-11/12 max-w-2xl my-8 transform transition-all duration-300 scale-100">
-            <!-- Content will be injected by openStudentAttemptModal or openTeacherEditModal -->
+            <!-- Content will be injected dynamically -->
         </div>
     </div>
 
