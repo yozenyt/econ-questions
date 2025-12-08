@@ -90,23 +90,32 @@
                 return false;
             }
         }
+        
+        // --- TAG PARSING HELPER ---
+        const parseTags = (tagString) => 
+            tagString ? tagString.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0) : [];
+        const formatTags = (tagArray) => 
+            tagArray ? tagArray.join(', ') : '';
+
 
         // ----------------------------------------------------
         // FIRESTORE API (Teacher)
         // ----------------------------------------------------
 
-        async function addTeacherQuestion(content, modelAnswer) {
+        async function addTeacherQuestion(content, modelAnswer, tags) {
             await addDoc(collection(db, QUESTIONS_COLLECTION_PATH), {
                 content,
                 modelAnswer,
+                tags: parseTags(tags), // Store as array
                 created_at: serverTimestamp()
             });
         }
         
-        async function updateTeacherQuestion(questionId, content, modelAnswer) {
+        async function updateTeacherQuestion(questionId, content, modelAnswer, tags) {
             await updateDoc(doc(db, QUESTIONS_COLLECTION_PATH, questionId), {
                 content,
-                modelAnswer
+                modelAnswer,
+                tags: parseTags(tags) // Store as array
             });
         }
         
@@ -168,6 +177,9 @@
                     <div>
                         <label class="block text-sm font-bold text-gray-800 mb-2">Question</label>
                         <textarea rows="3" readonly class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-900 resize-none shadow-inner">${masterQuestion.content || 'N/A'}</textarea>
+                        ${masterQuestion.tags && masterQuestion.tags.length > 0 ? 
+                            `<div class="flex flex-wrap mt-2">${masterQuestion.tags.map(tag => `<span class="px-2 py-0.5 text-xs font-medium bg-gray-200 text-gray-600 rounded-full mr-2 mb-1">${tag}</span>`).join('')}</div>`
+                            : ''}
                     </div>
                     
                     <div>
@@ -247,6 +259,9 @@
             
             if (!questionData) return handleError("Question not found.", null);
 
+            // Convert tags array back to comma-separated string for editing
+            const currentTags = formatTags(questionData.tags);
+
             document.getElementById('edit-modal-content').innerHTML = `
                 <div class="flex justify-between items-center mb-6 border-b pb-3 sticky top-0 bg-white z-10">
                     <h3 class="text-2xl font-bold text-indigo-800">Edit Question</h3>
@@ -265,7 +280,7 @@
                             class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"
                         >${questionData.content || ''}</textarea>
                     </div>
-                    
+
                     <div>
                         <label for="teacher-edit-answer" class="block text-sm font-bold text-indigo-700 mb-2">Answer Key</label>
                         <textarea 
@@ -274,6 +289,17 @@
                             placeholder="Edit the model answer."
                             class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"
                         >${questionData.modelAnswer || ''}</textarea>
+                    </div>
+
+                    <div>
+                        <label for="teacher-edit-tags" class="block text-sm font-bold text-indigo-700 mb-2">Tags (Comma-separated)</label>
+                        <input 
+                            type="text"
+                            id="teacher-edit-tags" 
+                            placeholder="e.g. Demand/Supply, Scarcity, Shares/Bonds"
+                            value="${currentTags}"
+                            class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 shadow-inner"
+                        />
                     </div>
                 </div>
 
@@ -303,13 +329,15 @@
             if (!currentQuestionId) return;
             const content = document.getElementById('teacher-edit-content').value.trim();
             const modelAnswer = document.getElementById('teacher-edit-answer').value.trim();
+            const tags = document.getElementById('teacher-edit-tags').value.trim();
+
             if (content.length < 5) return handleError("Question too short.", null);
 
             const updateButton = document.getElementById('update-button');
             updateButton.disabled = true;
 
             try {
-                await updateTeacherQuestion(currentQuestionId, content, modelAnswer);
+                await updateTeacherQuestion(currentQuestionId, content, modelAnswer, tags);
                 closeModal('edit-modal');
                 handleError("Question updated!", null);
             } catch (e) {
@@ -342,8 +370,11 @@
             if (!isTeacherMode) return;
             const contentInput = document.getElementById('new-question-content');
             const modelAnswerInput = document.getElementById('new-model-answer');
+            const tagsInput = document.getElementById('new-tags');
+            
             const content = contentInput.value.trim();
             const modelAnswer = modelAnswerInput.value.trim();
+            const tags = tagsInput.value.trim();
             
             if (content.length < 5) return handleError("Question too short.", null);
 
@@ -351,9 +382,10 @@
             saveButton.disabled = true;
 
             try {
-                await addTeacherQuestion(content, modelAnswer);
+                await addTeacherQuestion(content, modelAnswer, tags);
                 contentInput.value = '';
                 modelAnswerInput.value = '';
+                tagsInput.value = '';
                 handleError("Question Posted!", null);
             } catch (e) {
                 handleError("Post Failed.", e);
@@ -420,7 +452,13 @@
             
             const filteredQuestions = teacherQuestions.filter(q => {
                 const search = searchTerm;
-                return q.content.toLowerCase().includes(search) || q.modelAnswer?.toLowerCase().includes(search) || studentAttempts[q.id]?.studentAnswer?.toLowerCase().includes(search);
+                const tagString = q.tags ? q.tags.join(' ').toLowerCase() : '';
+
+                // Check content, model answer, student notes, and tags
+                return q.content.toLowerCase().includes(search) || 
+                       q.modelAnswer?.toLowerCase().includes(search) || 
+                       studentAttempts[q.id]?.studentAnswer?.toLowerCase().includes(search) ||
+                       tagString.includes(search);
             });
 
             if (filteredQuestions.length === 0) {
@@ -438,6 +476,11 @@
                     <li class="p-5 hover:bg-gray-50 transition cursor-pointer flex justify-between items-start" onclick="handleQuestionClick('${q.id}')">
                         <div class="flex-1 min-w-0 pr-4">
                             <p class="text-gray-800 font-semibold mb-1">${q.content}</p>
+                            ${q.tags && q.tags.length > 0 ? 
+                                `<div class="flex flex-wrap mt-1 mb-2">
+                                    ${q.tags.map(tag => `<span class="px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-full mr-2 mb-1">${tag}</span>`).join('')}
+                                </div>` 
+                                : ''}
                             ${attempt?.studentAnswer ? `<p class="text-sm text-gray-500 truncate mt-1">Notes: ${attempt.studentAnswer}</p>` : `<p class="text-sm text-gray-400 mt-1">Click to add notes.</p>`}
                         </div>
                         <div class="flex items-center space-x-3 flex-shrink-0">
@@ -509,6 +552,15 @@
                     <label for="new-model-answer" class="sr-only">Answer Key</label>
                     <textarea id="new-model-answer" rows="3" placeholder="Enter answer key..." class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none shadow-inner"></textarea>
                 </div>
+                <div>
+                    <label for="new-tags" class="sr-only">Tags</label>
+                    <input 
+                        type="text"
+                        id="new-tags" 
+                        placeholder="Tags (Comma-separated)"
+                        class="w-full p-3 border border-indigo-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 shadow-inner"
+                    />
+                </div>
                 <div class="flex justify-end">
                     <button id="add-question-button" onclick="addQuestion()" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-lg focus:outline-none focus:ring-4 focus:ring-indigo-300">
                         Post
@@ -524,7 +576,7 @@
             <div class="px-6 sm:px-8 mb-4">
                 <input 
                     type="text" 
-                    placeholder="Search all content..."
+                    placeholder="Search all content, notes, or tags..."
                     oninput="setSearchTerm(event)"
                     class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-micro focus:border-micro shadow-inner"
                     aria-label="Search questions"
